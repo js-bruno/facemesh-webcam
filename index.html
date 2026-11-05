@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<!--
+  meshvtuber — preview estilo Kalidoface 3D (https://3d.kalidoface.com)
+  Reutiliza o trecho de desenho do proprio Kalidoface (repo yeemachine/kalidoface-3d,
+  branch glitch, docs/assets/index.e2bec78d.js, caso "holistic") e as MESMAS
+  libs: @mediapipe/holistic@0.5.1635989137 + @mediapipe/drawing_utils@0.3.1620248257
+  (versoes do package-lock.json dele). Tudo offline em ./lib.
+
+  Padrao: SOMENTE O MESH (camera oculta, fundo preto).
+    ?video                 -> mostra o feed da camera com o mesh por cima
+    ?bg=transparent        -> fundo transparente (OBS Browser Source)
+    ?bg=%23ff0000          -> qualquer cor de fundo
+    ?mirror                -> espelha (selfie)
+    ?zoom=1.3              -> escala do avatar
+    ?demo                  -> usa demo.jpg em vez da camera
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>meshvtuber — preview Kalidoface</title>
+<style>
+  html { background: transparent; }
+  body {
+    margin: 0; height: 100vh; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #wrap { position: relative; }
+  #video, #img, #canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    display: block;
+  }
+  #video, #img { object-fit: cover; }
+  #status {
+    position: fixed; top: 8px; left: 8px; color: #eee;
+    font: 13px monospace; background: rgba(0,0,0,.5); padding: 4px 8px;
+    border-radius: 4px; display: none;
+  }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <img id="img" alt="">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div id="status"></div>
+
+  <script src="lib/holistic/holistic.js"></script>
+  <script src="lib/drawing_utils/drawing_utils.js"></script>
+  <script>
+    // ============================================================
+    // CONFIG — unico lugar pra ajustar (sem teclas de interacao)
+    // ============================================================
+    const params = new URLSearchParams(location.search);
+    const CONFIG = {
+      camera: !params.has("demo"),                  // ?demo = usa imagem
+      demoImage: "demo.jpg",
+      showVideo: params.has("video"),               // padrao: so o mesh
+      background: params.get("bg") || "#000",       // "transparent" p/ OBS
+      mirror: params.has("mirror"),
+      zoom: parseFloat(params.get("zoom")) || 1,    // ?zoom=1.3
+      mode: "holistic",                             // unico modo, como o Kalidoface
+    };
+
+    // ============================================================
+    // Setup: video/imagem + canvas do mesmo tamanho (igual ao dele)
+    // ============================================================
+    const video = document.getElementById("video");
+    const img = document.getElementById("img");
+    const wrap = document.getElementById("wrap");
+    const canvas = document.getElementById("canvas");
+    const rt = canvas.getContext("2d");
+    const status = document.getElementById("status");
+
+    document.body.style.background = CONFIG.background;
+    if (CONFIG.mirror) wrap.style.transform = "scaleX(-1)";
+    if (!CONFIG.showVideo) {
+      // camera continua tocando como fonte do mediapipe, so nao aparece
+      video.style.display = "none";
+      img.style.display = "none";
+    }
+
+    function showStatus(msg) {
+      status.textContent = msg;
+      status.style.display = msg ? "block" : "none";
+    }
+
+    let source = null; // <video> ou <img> — o que o holistic recebe
+    let lastTime = -1;
+
+    // Canvas-fonte: o frame e copiado pra ca antes de ir pro MediaPipe.
+    // Assim o video/imagem pode ficar escondido (display:none) sem quebrar o tracking.
+    const srcCanvas = document.createElement("canvas");
+    const sctx = srcCanvas.getContext("2d");
+
+    function setCanvasSize(w, h) {
+      if (!w || !h) return;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+    }
+
+    // Encaixa o avatar na janela mantendo o aspecto da fonte.
+    function layout() {
+      let vw = 0, vh = 0;
+      if (video.videoWidth) { vw = video.videoWidth; vh = video.videoHeight; }
+      else if (img.naturalWidth) { vw = img.naturalWidth; vh = img.naturalHeight; }
+      if (!vw || !vh) return;
+      setCanvasSize(vw, vh);
+      const scale = Math.min(innerWidth / vw, innerHeight / vh) * CONFIG.zoom;
+      wrap.style.width = Math.round(vw * scale) + "px";
+      wrap.style.height = Math.round(vh * scale) + "px";
+    }
+    addEventListener("resize", layout);
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        video.srcObject = stream;
+        video.addEventListener("loadedmetadata", layout);
+        await video.play();
+        source = video;
+        layout();
+      } catch (err) {
+        showStatus("sem camera (" + err.name + ") — use ?demo");
+        source = img;
+        initImage();
+      }
+    }
+
+    function initImage() {
+      img.onload = () => { source = img; layout(); };
+      img.onerror = () => showStatus("imagem demo nao encontrada: " + CONFIG.demoImage);
+      img.src = CONFIG.demoImage;
+    }
+
+    if (CONFIG.camera) initCamera();
+    else initImage();
+
+    // ============================================================
+    // MediaPipe Holistic — MESMO pacote e opcoes do Kalidoface
+    // ============================================================
+    let holistic = null;
+    try {
+      holistic = new Holistic({
+        locateFile: (file) => "lib/holistic/" + file,
+        refineFaceLandmarks: true,   // opcao da API legada: iris -> 478 pts
+        modelComplexity: 1,
+        smoothLandmarks: true,
+      });
+    } catch (err) {
+      showStatus("ERRO criando Holistic: " + err.message);
+    }
+
+    let meshVivo = false;
+    let modeloPronto = false;
+    if (holistic) {
+      try { holistic.setOptions({ refineFaceLandmarks: true }); } catch (e) { showStatus("ERRO setOptions: " + e); }
+      holistic.initialize()
+        .then(() => { modeloPronto = true; showStatus("modelo carregado"); })
+        .catch((e) => showStatus("ERRO carregando modelo: " + e));
+    }
+
+    // ============================================================
+    // Bloco de desenho COPIADO do Kalidoface (caso "holistic")
+    // fonte: yeemachine/kalidoface-3d docs/assets/index.e2bec78d.js
+    // ============================================================
+    function desenhar(results) {
+      const l = results;
+      const e = CONFIG.mode;
+      if (!meshVivo) {
+        meshVivo = true;
+        showStatus("mesh ativo ✓");
+        setTimeout(() => showStatus(""), 2000);
+      }
+      rt.save();
+      rt.clearRect(0, 0, canvas.width, canvas.height);
+      switch (e) {
+      case "holistic":
+        drawConnectors(rt, l.poseLandmarks, POSE_CONNECTIONS, {color: "#00cff7", lineWidth: 4});
+        drawLandmarks(rt, l.poseLandmarks, {color: "#ff0364", lineWidth: 2});
+        drawConnectors(rt, l.faceLandmarks, FACEMESH_TESSELATION, {color: "#C0C0C070", lineWidth: 1});
+        l.faceLandmarks && l.faceLandmarks.length === 478 && drawLandmarks(rt, [l.faceLandmarks[468], l.faceLandmarks[468 + 5]], {color: "#ffe603", lineWidth: 2});
+        drawConnectors(rt, l.leftHandLandmarks, HAND_CONNECTIONS, {color: "#eb1064", lineWidth: 5});
+        drawLandmarks(rt, l.leftHandLandmarks, {color: "#00cff7", lineWidth: 2});
+        drawConnectors(rt, l.rightHandLandmarks, HAND_CONNECTIONS, {color: "#22c3e3", lineWidth: 5});
+        drawLandmarks(rt, l.rightHandLandmarks, {color: "#ff0364", lineWidth: 2});
+        break;
+      }
+      rt.restore();
+      if (params.has("debug")) {
+        const n = l.faceLandmarks ? l.faceLandmarks.length : 0;
+        rt.fillStyle = n === 478 ? "#ff0000" : n === 468 ? "#00ff00" : "#0000ff";
+        rt.fillRect(0, 0, 48, 48);
+        showStatus(
+          "face=" + n +
+          " pose=" + (l.poseLandmarks ? l.poseLandmarks.length : 0) +
+          " lh=" + (l.leftHandLandmarks ? l.leftHandLandmarks.length : 0) +
+          " rh=" + (l.rightHandLandmarks ? l.rightHandLandmarks.length : 0)
+        );
+      }
+    }
+
+    holistic.onResults(desenhar);
+
+    // ============================================================
+    // Loop de deteccao (mesmo padrao do Kalidoface)
+    // ============================================================
+    let framesEnviados = 0;
+    let lastImageSend = 0;
+
+    function sendFrame(el, w, h) {
+      if (srcCanvas.width !== w || srcCanvas.height !== h) {
+        srcCanvas.width = w;
+        srcCanvas.height = h;
+      }
+      sctx.drawImage(el, 0, 0, w, h);
+      holistic.send({ image: srcCanvas }).catch((err) => {
+        if (framesEnviados < 3) showStatus("ERRO no send: " + err);
+      });
+      framesEnviados++;
+    }
+
+    function loop() {
+      if (holistic && source && modeloPronto) {
+        if (source.tagName === "VIDEO") {
+          if (source.readyState >= 2 && source.currentTime !== lastTime) {
+            lastTime = source.currentTime;
+            sendFrame(source, source.videoWidth, source.videoHeight);
+          }
+        } else if (source.complete && source.naturalWidth > 0) {
+          // imagem estatica: reenvia de vez em quando (demo)
+          const now = performance.now();
+          if (now - lastImageSend > 500) {
+            lastImageSend = now;
+            sendFrame(source, source.naturalWidth, source.naturalHeight);
+          }
+        }
+        if (framesEnviados > 30 && !meshVivo) {
+          showStatus("modelo nao respondeu — abra F12 (console) e veja os erros");
+        }
+      }
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
