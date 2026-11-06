@@ -6,6 +6,12 @@ mesmas libs (versões do package-lock dele). Tudo roda 100% offline.
 
 **Padrão: só o mesh** (câmera oculta, fundo preto).
 
+> ℹ️ O **esqueleto do pose no rosto** (linhas azuis + pontos rosas do nariz,
+> olhos e orelhas) vem **oculto por padrão**. Use `?poseface=1` para mostrá-lo.
+
+> 📘 Documento detalhado para agentes/IA (arquitetura, decisões e armadilhas):
+> [`PROJECT.md`](PROJECT.md).
+
 ## Rodar
 
 ```bash
@@ -24,6 +30,7 @@ Abra **http://localhost:8000** no Firefox/Chromium e permita a câmera.
 | `http://localhost:8000/?bg=%23200` | qualquer cor de fundo (hex URL-encoded) |
 | `http://localhost:8000/?mirror` | espelha (selfie) |
 | `http://localhost:8000/?zoom=1.4` | escala do avatar |
+| `http://localhost:8000/?poseface=1` | mostra o esqueleto do pose no rosto (padrão: oculto) |
 | `http://localhost:8000/?demo` | usa `demo.jpg` em vez da câmera |
 
 Combináveis: `?demo&bg=transparent&zoom=1.3`
@@ -44,6 +51,10 @@ Cores/espessuras (verbatim do código dele):
 - rosto: malha `#C0C0C070` (1) + íris `#ffe603` (2 pontos: 468 e 473)
 - mão esquerda: linhas `#eb1064` (5) + pontos `#00cff7` (2)
 - mão direita: linhas `#22c3e3` (5) + pontos `#ff0364` (2)
+
+> **Única diferença proposital em relação ao Kalidoface:** o esqueleto do pose
+> no rosto (índices 0–10: nariz, olhos, orelhas e boca) é oculto por padrão
+> para deixar a face limpa. `?poseface=1` restaura o comportamento original.
 
 ## OBS
 
